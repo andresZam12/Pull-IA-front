@@ -21,39 +21,6 @@ interface NewsFeedProps {
   initialArticles: ArticleItem[];
 }
 
-interface GrpcStreamFrameUI {
-  event: {
-    step: number;
-    totalSteps: number;
-    stage: number;
-    stageName: string;
-    message: string;
-    sourceName?: string;
-    articleTitle?: string;
-    assignedCategory?: string;
-    fetchedCount?: number;
-    newCandidates?: number;
-    publishedCount?: number;
-    purgedCount?: number;
-    elapsedMs: number;
-  };
-  grpcMethod: string;
-  protobufBytes: number;
-  jsonBytes: number;
-  savingsPercent: number;
-  wireHexPreview: string;
-}
-
-interface GrpcStreamSummaryUI {
-  totalProtobufBytes: number;
-  totalJsonBytes: number;
-  totalSavingsPercent: number;
-  durationMs: number;
-  fetchedCount: number;
-  newCount: number;
-  protoSchema?: string;
-}
-
 const PAGE_SIZE = 12;
 
 const logoImage =
@@ -184,12 +151,6 @@ export function NewsFeed({ initialArticles }: NewsFeedProps) {
     type: "info" | "success" | "error";
     message: string;
   } | null>(null);
-  const [grpcFrames, setGrpcFrames] = useState<GrpcStreamFrameUI[]>([]);
-  const [grpcSummary, setGrpcSummary] = useState<GrpcStreamSummaryUI | null>(
-    null
-  );
-  const [showGrpcPanel, setShowGrpcPanel] = useState(false);
-  const [showProtoModal, setShowProtoModal] = useState(false);
 
   // SoftStack Newsletter form state
   const [email, setEmail] = useState("");
@@ -212,19 +173,16 @@ export function NewsFeed({ initialArticles }: NewsFeedProps) {
     if (syncFeedback) {
       const timer = setTimeout(() => {
         setSyncFeedback(null);
-      }, 10000);
+      }, 5000);
       return () => clearTimeout(timer);
     }
   }, [syncFeedback]);
 
-  // Handle on-demand news search via gRPC Server-Side Streaming (`NewsPipelineService.StreamSyncProgress`)
+  // Handle on-demand news search via gRPC Server-Side Streaming (runs seamlessly in background)
   const handleRefresh = useCallback(async () => {
     if (isSyncing) return;
     setIsSyncing(true);
     setSyncFeedback(null);
-    setGrpcFrames([]);
-    setGrpcSummary(null);
-    setShowGrpcPanel(true);
 
     const backendUrl =
       process.env.NEXT_PUBLIC_BACKEND_URL || "https://pull-ia-back.vercel.app";
@@ -258,24 +216,30 @@ export function NewsFeed({ initialArticles }: NewsFeedProps) {
             try {
               const parsed = JSON.parse(line);
               if (parsed.type === "GRPC_STREAM_FRAME" && parsed.frame) {
-                setGrpcFrames((prev) => [...prev.slice(-6), parsed.frame]);
+                // Developer logs in background (bajo cuerda)
+                console.debug(
+                  `[gRPC Stream · ${parsed.frame.grpcMethod}]`,
+                  parsed.frame.event?.message,
+                  `(${parsed.frame.protobufBytes}B Protobuf)`
+                );
               } else if (parsed.type === "GRPC_STREAM_SUMMARY") {
-                setGrpcSummary({
-                  totalProtobufBytes: parsed.totalProtobufBytes ?? 0,
-                  totalJsonBytes: parsed.totalJsonBytes ?? 0,
-                  totalSavingsPercent: parsed.totalSavingsPercent ?? 0,
-                  durationMs: parsed.durationMs ?? 0,
-                  fetchedCount: parsed.fetchedCount ?? 0,
-                  newCount: parsed.newCount ?? 0,
-                  protoSchema: parsed.protoSchema,
-                });
+                console.info(
+                  "[gRPC Sync Completed]",
+                  `Fetched: ${parsed.fetchedCount}, New: ${parsed.newCount}, Protobuf: ${parsed.totalProtobufBytes}B`
+                );
 
+                const newCount = parsed.newCount ?? 0;
                 setSyncFeedback({
-                  type: parsed.newCount > 0 ? "success" : "info",
-                  message: parsed.message || t.syncUpToDate,
+                  type: newCount > 0 ? "success" : "info",
+                  message:
+                    newCount > 0
+                      ? locale === "es"
+                        ? `¡Se actualizaron ${newCount} ${newCount === 1 ? "noticia nueva" : "noticias nuevas"}!`
+                        : `Updated ${newCount} new ${newCount === 1 ? "article" : "articles"}!`
+                      : t.syncUpToDate,
                 });
 
-                if (parsed.newCount > 0) {
+                if (newCount > 0) {
                   const fetchRes = await fetch(
                     `/api/articles?days=30&limit=100`
                   ).catch(() =>
@@ -313,13 +277,19 @@ export function NewsFeed({ initialArticles }: NewsFeedProps) {
 
       if (fallbackRes && fallbackRes.ok) {
         const data = await fallbackRes.json();
+        const newCount = data.newCount ?? 0;
         setSyncFeedback({
-          type: data.newCount > 0 ? "success" : "info",
-          message: data.message || t.syncUpToDate,
+          type: newCount > 0 ? "success" : "info",
+          message:
+            newCount > 0
+              ? locale === "es"
+                ? `¡Se actualizaron ${newCount} noticias nuevas!`
+                : `Updated ${newCount} new articles!`
+              : t.syncUpToDate,
         });
       }
     } catch (err) {
-      console.error("[NewsFeed] Error in gRPC live refresh:", err);
+      console.error("[NewsFeed] Error in live refresh:", err);
       setSyncFeedback({
         type: "info",
         message: t.syncUpToDate,
@@ -327,7 +297,7 @@ export function NewsFeed({ initialArticles }: NewsFeedProps) {
     } finally {
       setIsSyncing(false);
     }
-  }, [isSyncing, t]);
+  }, [isSyncing, locale, t]);
 
   // Handle SoftStack Newsletter Subscription (`POST /api/subscribe`)
   const handleSubscribe = async (e: React.FormEvent) => {
@@ -433,8 +403,6 @@ export function NewsFeed({ initialArticles }: NewsFeedProps) {
   const visibleArticles = useMemo(() => {
     return filteredArticles.slice(0, visibleCount);
   }, [filteredArticles, visibleCount]);
-
-  const latestFrame = grpcFrames[grpcFrames.length - 1];
 
   const todayFormatted = useMemo(() => {
     return new Date().toLocaleDateString(
@@ -649,150 +617,6 @@ export function NewsFeed({ initialArticles }: NewsFeedProps) {
               </button>
             </div>
           </div>
-
-          {/* Editorial gRPC Server-Side Streaming Live Console */}
-          {showGrpcPanel && (grpcFrames.length > 0 || isSyncing) && (
-            <div
-              style={{
-                marginTop: "20px",
-                background: "var(--paper-light)",
-                border: "2px solid var(--ink)",
-                boxShadow: "8px 8px 0 rgba(25,24,23,.22)",
-                padding: "18px 22px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "10px",
-                  borderBottom: "2px solid var(--ink)",
-                  paddingBottom: "10px",
-                  marginBottom: "12px",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                  }}
-                >
-                  <span className="live-dot" />
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      fontWeight: 900,
-                      textTransform: "uppercase",
-                      letterSpacing: ".12em",
-                      color: "var(--red)",
-                    }}
-                  >
-                    gRPC Server-Side Stream · NewsPipelineService/StreamSyncProgress
-                  </span>
-                </div>
-
-                <div style={{ display: "flex", gap: "8px" }}>
-                  {grpcSummary?.protoSchema && (
-                    <button
-                      type="button"
-                      onClick={() => setShowProtoModal((prev) => !prev)}
-                      className="filter"
-                      style={{ padding: "5px 12px", fontSize: "10px" }}
-                    >
-                      {showProtoModal
-                        ? "Ocultar pullia.proto"
-                        : "Ver Contrato pullia.proto"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowGrpcPanel(false)}
-                    className="icon-button"
-                    style={{ width: "26px", height: "26px" }}
-                    aria-label="Cerrar panel gRPC"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gap: "6px" }}>
-                {grpcFrames.map((frame, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: "8px",
-                      padding: "6px 10px",
-                      background: "var(--paper)",
-                      border: "1px solid var(--line)",
-                      fontFamily: "monospace",
-                      fontSize: "11px",
-                    }}
-                  >
-                    <div>
-                      <strong style={{ color: "var(--red)" }}>
-                        [{frame.event.stageName}]
-                      </strong>{" "}
-                      <span>{frame.event.message}</span>
-                    </div>
-                    <div style={{ color: "var(--muted)", fontWeight: 700 }}>
-                      Protobuf: {frame.protobufBytes}B vs JSON:{" "}
-                      {frame.jsonBytes}B (-{frame.savingsPercent}%)
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {latestFrame && (
-                <div
-                  style={{
-                    marginTop: "10px",
-                    paddingTop: "10px",
-                    borderTop: "1px solid var(--line)",
-                    display: "flex",
-                    flexWrap: "wrap",
-                    justifyContent: "space-between",
-                    gap: "10px",
-                    fontFamily: "monospace",
-                    fontSize: "11px",
-                    color: "var(--muted)",
-                  }}
-                >
-                  <span>Wire Frame (Hex): {latestFrame.wireHexPreview}</span>
-                  {grpcSummary && (
-                    <strong style={{ color: "var(--ink)" }}>
-                      Total Protobuf: {grpcSummary.totalProtobufBytes}B vs JSON:{" "}
-                      {grpcSummary.totalJsonBytes}B (Ahorro:{" "}
-                      {grpcSummary.totalSavingsPercent}%)
-                    </strong>
-                  )}
-                </div>
-              )}
-
-              {showProtoModal && grpcSummary?.protoSchema && (
-                <pre
-                  style={{
-                    marginTop: "12px",
-                    maxHeight: "220px",
-                    overflow: "auto",
-                    padding: "12px",
-                    background: "#191817",
-                    color: "#eee9df",
-                    fontSize: "11px",
-                  }}
-                >
-                  {grpcSummary.protoSchema}
-                </pre>
-              )}
-            </div>
-          )}
 
           {/* Sync Feedback Notice */}
           {syncFeedback && (
