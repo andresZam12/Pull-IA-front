@@ -197,3 +197,4 @@ export function encodeSyncProgressFrame(
     protobufBase64: grpcWireFrame.toString("base64"),
   };
 }
+

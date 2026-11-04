@@ -68,3 +68,4 @@ message PipelineStatusResponse {
   repeated CategoryCount categories = 6;
   int64 timestamp_ms = 7;
 }
+

@@ -11,27 +11,27 @@
 import { Resend } from "resend";
 import nodemailer from "nodemailer";
 
-const resend = process.env.RESEND_API_KEY
-  ? new Resend(process.env.RESEND_API_KEY)
-  : null;
+function getResendClient(): Resend | null {
+  const key = process.env.RESEND_API_KEY?.trim();
+  return key ? new Resend(key) : null;
+}
 
-const gmailUser = process.env.GMAIL_USER?.trim();
-const gmailPass = process.env.GMAIL_APP_PASSWORD?.replace(/\s+/g, "");
+function getSmtpTransporter() {
+  const user = process.env.GMAIL_USER?.trim();
+  const pass = process.env.GMAIL_APP_PASSWORD?.replace(/\s+/g, "");
+  if (!user || !pass) return null;
 
-const smtpTransporter =
-  gmailUser && gmailPass
-    ? nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-          user: gmailUser,
-          pass: gmailPass,
-        },
-      })
-    : null;
+  return nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user,
+      pass,
+    },
+  });
+}
 
 const FROM_NAME = process.env.RESEND_FROM_NAME ?? "SoftStack • Deplhoy";
 const RESEND_FROM = `${FROM_NAME} <${process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev"}>`;
-const SMTP_FROM = `${FROM_NAME} <${gmailUser ?? "no-reply@deplhoy.com"}>`;
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ?? "https://deplhoy-zeta.vercel.app";
 
@@ -45,19 +45,28 @@ async function dispatchEmail(params: {
   html: string;
   headers?: Record<string, string>;
 }): Promise<boolean> {
+  const transporter = getSmtpTransporter();
+  const user = process.env.GMAIL_USER?.trim();
+  const smtpFrom = `${FROM_NAME} <${user ?? "no-reply@deplhoy.com"}>`;
+
   // 1. Try Gmail SMTP first (can deliver to any email address without domain restrictions)
-  if (smtpTransporter) {
-    await smtpTransporter.sendMail({
-      from: SMTP_FROM,
-      to: params.to,
-      subject: params.subject,
-      html: params.html,
-      headers: params.headers,
-    });
-    return true;
+  if (transporter) {
+    try {
+      await transporter.sendMail({
+        from: smtpFrom,
+        to: params.to,
+        subject: params.subject,
+        html: params.html,
+        headers: params.headers,
+      });
+      return true;
+    } catch (smtpErr) {
+      console.error(`[Email SMTP] Error sending to ${params.to}:`, smtpErr);
+    }
   }
 
   // 2. Fallback to Resend API
+  const resend = getResendClient();
   if (resend) {
     const { error } = await resend.emails.send({
       from: RESEND_FROM,

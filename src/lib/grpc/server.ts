@@ -138,3 +138,4 @@ export function startGrpcServer(port = 50051): grpc.Server {
 
   return server;
 }
+

@@ -250,7 +250,7 @@ export function buildWeeklyNewsletterHtml(
 }
 
 /**
- * Creates a NewsletterIssue record and sends the weekly digest to all confirmed subscribers.
+ * Creates a NewsletterIssue record and sends the weekly digest to all active subscribers.
  */
 export async function dispatchWeeklyNewsletterIssue(): Promise<{
   issueId: string;
@@ -274,8 +274,8 @@ export async function dispatchWeeklyNewsletterIssue(): Promise<{
 
   const subscribers = await prisma.subscriber.findMany({
     where: {
-      status: "CONFIRMED",
-      confirmed: true,
+      unsubscribedAt: null,
+      status: { not: "UNSUBSCRIBED" },
     },
   });
 
